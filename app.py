@@ -11,7 +11,7 @@ class Mapper:
         STOP_WORDS = set([
             'a', 'an', 'and', 'are', 'as', 'be', 'by', 'for', 'if',
             'in', 'is', 'it', 'of', 'or', 'py', 'rst', 'that', 'the',
-            'to', 'with',
+            'to', 'with', 'rfc', 'not', 's', 'org', 'www', 'ietf', 'https', 'on'
         ])
         # Replace all punctuation with spaces.
         TR = str.maketrans({
@@ -19,7 +19,7 @@ class Mapper:
             for p in string.punctuation
         })
         print('{} reading {}'.format(multiprocessing.current_process().name, filename)) # Print the progress of the mapper
-        
+
         output = [] # A sequence of (word, occurences) tuples
         with open(filename, 'rt') as f:
             for line in f:
@@ -32,6 +32,7 @@ class Mapper:
                     if word.isalpha() and word not in STOP_WORDS: 
                         output.append((word, 1)) 
         return output
+    
 
 class Reducer:
     def partition(self, mapped_values):
@@ -62,16 +63,20 @@ def map_worker(input_data, output_queue):
     Process input data using a Mapper object and put the results into an output queue.
     """
     mapper = Mapper()
+
     for data in input_data: # for each file in input_data file list, call mapper.map
         output = mapper.map(data)
+        output.sort()
         output_queue.put(output)
+    
         
 
 def reduce_worker(mapper_outputs, result_queue):
     """
     Process input data using a Reducer object and put the results into an output queue.
     """
-    reducer = Reducer()    
+    reducer = Reducer()  
+
     result = reducer.reduce(mapper_outputs)
     result_queue.put(result)
 
@@ -79,39 +84,60 @@ def start_mappers(filenames, reducer_queues, output_queue, number_mappers):
         """
         Start mapper processes and return a list of queues that contain the mapped values.
         """
+        print('Starting mapper processes')
         mapper_processes = []
         for i in range(number_mappers):
             split_point = len(filenames) // number_mappers 
-            input = filenames[i * split_point: (i + 1) * split_point] # Split the filenames into chunks
+            remaining = len(filenames) % number_mappers
+            if i == number_mappers - 1:
+                input = filenames[i * split_point: (i + 1) * split_point + remaining] # Add the remaining files to the last mapper
+            else:
+                input = filenames[i * split_point: (i + 1) * split_point] # Split the filenames into chunks
             mapper = multiprocessing.Process(target=map_worker, args=(input, output_queue)) # Create a mapper process
+
             mapper_processes.append(mapper)
-        
+
         for mapper in mapper_processes:
             mapper.start() # Start the mapper process
+        
+        # mapper.terminate()
+
         for mapper in mapper_processes:
             mapper.join() # Wait for the mapper process to finish
+        
 
-        print('Output queue size: {}'.format(output_queue.qsize()))
+        queue_length = output_queue.qsize()
+        output_queue.put(None) # Add None to the output queue to signal the end of the queue
 
-        for i in range(output_queue.qsize()):
-            output = output_queue.get() # Get the output from the output queue
-            hash_value = hash(i) # Hash the index of the output queue
+        for item in iter(output_queue.get, None): # Iterate through the output queue
+            queue_length = output_queue.qsize() # Get the length of the output queue
+            hash_value = hash(queue_length) # Hash the index of the output queue
             positive_hash = hash_value % (2**64) # Ensure the hash value is non-negative
             reducer_index = positive_hash % len(reducer_queues) # Map the hash value to a specific reducer index
-            reducer_queues[reducer_index] += output # Add the output to the reducer queue
-            print('Output was sent to reducer with index {}'.format(reducer_index)) 
+            reducer_queues[reducer_index] += item # Add the output to the reducer queue
+            print("Added to reducer queue {}".format(reducer_index)) # Print the progress of the reducer
 
-        reducer_queues.sort()
+        new_queue = [] 
+        for i, queue in enumerate(reducer_queues): 
+            split_point = len(reducer_queues[0]) // len(reducer_queues) 
+            remaining = len(reducer_queues[0]) % len(reducer_queues) 
+            if i == len(reducer_queues)  - 1:
+                input = reducer_queues[0][i * split_point: (i + 1) * split_point + remaining] 
+            else:
+                input = reducer_queues[0][i * split_point: (i + 1) * split_point] 
+            new_queue.append(input)
+        
+        reducer_queues = new_queue
         for queue in reducer_queues:
             queue.append("EOF") # Add EOF to the end of each reducer queue
-
+        
         return reducer_queues
 
 def start_reducers(reducer_queues, result_queue, number_mappers, number_reducers):
         """
         Start reducer processes and return a list of queues that contain the reduced values.
         """
-        
+        print('Starting reducer processes')
         if all(queue[-1] != "EOF" for queue in reducer_queues): # Check if EOF is in the reducer queues
             print("Error: EOF not found in reducer queues. Mapping has not finished yet.")
             return        
@@ -122,12 +148,14 @@ def start_reducers(reducer_queues, result_queue, number_mappers, number_reducers
         reducer_processes = []
         for i in range(number_reducers):
             input = reducer_queues[i]
-            input.sort() 
             reducer = multiprocessing.Process(target=reduce_worker, args=(input, result_queue)) # Create a reducer process
             reducer_processes.append(reducer) # Add the reducer process to the reducer_processes list
         
         for reducer in reducer_processes:
             reducer.start() # Start the reducer process
+        
+        # reducer.terminate()  
+
         for reducer in reducer_processes:
             reducer.join()  # Wait for the reducer process to finish
         
@@ -176,13 +204,15 @@ def main():
     output_queue = manager.Queue()
     result_queue = manager.Queue() 
 
-    number_mappers = 2
+    number_mappers = 4
     number_reducers = 2
 
     reducer_input = [[]] * number_reducers
-    
     reducer_queues = start_mappers(filenames, reducer_input, output_queue, number_reducers) # Start the mappers
+    print('Mapper processes finished')
+
     reduced_values = start_reducers(reducer_queues, result_queue, number_mappers, number_reducers) # Start the reducers
+    print('Reducer processes finished')
 
     return return_top20(reduced_values)
     
