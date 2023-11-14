@@ -1,1 +1,8 @@
-# MapReduce_WordCount
+# MapReduce Word Count
+
+In the app.py script, I implemented MapReduce using the multiprocessing module to count and return 20 of the most frequent words. The data is stored in one input directory containing almost 400 text files. These files are subsequently used in the mapping stage, where they have been divided between mappers to get (key, value) pairs for the subsequent reduce stage. 
+
+To start the process, firstly, a multiprocessing manager was created with two separate queues of mapper and reducer pools. A pool of reducer processes is initiated, with each reducer multiprocessing queue within the general queue. Each reducer queue contains the outputs from a mapper. Subsequently, when mapper processes are launched after initialization, each mapping worker is assigned a list of file names as the data input and provided with a list of reducer queues. Once the mapping is done, the output data is hashed using the hash() built-in function to be sent and stored in the reducer queue of the appropriate reducer. 
+
+Once all mapper processes have been completed, a signal was sent to each reducer queue that all files have been mapped. It is done by adding an “EOF” string at the end of each reducer queue within the reducer_queues variable. Upon receiving EOF messages from every mapper by checking the last element, the reducer processes start and write their results to individual files and complete their execution. The main function uses the join() method to wait for the completion of all mapper and reducer processes. Eventually, twenty of the most frequent words are returned based on the input. 
+
